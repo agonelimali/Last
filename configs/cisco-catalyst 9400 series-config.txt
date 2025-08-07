@@ -1,0 +1,336 @@
+=== NETWORK ARCHITECTURE OVERVIEW ===
+
+Network Architecture Requirements:
+- Segregate Content Delivery (10.250.0.0/24), Monitoring (10.251.0.0/24), and Analytics (10.252.0.0/24) via dedicated VLANs and SVIs.
+- Secure management and monitoring access using ACLs, AAA, and SSH.
+- Enable adaptive bitrate streaming optimization and real-time quality monitoring by prioritizing streaming and monitoring traffic (QoS, storm control, port security).
+- Support content caching, acceleration, and CDN integration with resilient routing and failover.
+- Provide live streaming support with multicast and optimized switching.
+- Enforce content protection mechanisms (port security, secure management, ACLs).
+- Enable automated quality adjustment based on network conditions (QoS, monitoring, SNMP traps).
+- Ensure compliance with enterprise security and operational best practices.
+- Maintain high availability and robust monitoring for operational assurance.
+
+=== DEVICE 1: CISCO-CORE ===
+
+! ===== SECTION: Basic Device Configuration =====
+hostname CISCO-CORE
+!
+enable secret 9 $9$k2j3h4l5m6n7o8p9q0r1s2t3u4v5w6x7
+!
+username netadmin privilege 15 secret 9 $9$A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6
+username monitor privilege 7 secret 9 $9$M1N2O3P4Q5R6S7T8U9V0W1X2Y3Z4A5B6
+!
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+no ip bootp server
+!
+banner motd ^C
+************************************************************************
+*  UNAUTHORIZED ACCESS TO THIS DEVICE IS PROHIBITED.                   *
+*  All activities are monitored and logged.                            *
+^C
+!
+clock timezone UTC 0 0
+ip domain-name streaming.local
+ip name-server 8.8.8.8
+ip name-server 8.8.4.4
+!
+crypto key generate rsa modulus 2048
+!
+ip ssh version 2
+ip ssh time-out 60
+ip ssh authentication-retries 3
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Security Hardening =====
+aaa new-model
+aaa authentication login default local
+aaa authorization exec default local
+aaa session-id common
+!
+login block-for 300 attempts 3 within 120
+!
+security passwords min-length 12
+password encryption aes
+!
+ip access-list standard MGMT-ACCESS
+ permit 10.251.0.0 0.0.0.255
+ deny   any
+!
+ip access-list extended ACL-ADMIN-ACCESS
+ permit tcp 10.251.0.0 0.0.0.255 any eq 22
+ permit tcp 10.251.0.0 0.0.0.255 any eq 443
+ permit tcp 10.251.0.0 0.0.0.255 any eq 80
+ deny   ip any any log
+!
+ip access-list extended ACL-STREAMING
+ permit ip 10.250.0.0 0.0.0.255 any
+ permit ip any 10.250.0.0 0.0.0.255
+ deny   ip any any log
+!
+ip access-list extended ACL-ANALYTICS
+ permit ip 10.252.0.0 0.0.0.255 any
+ permit ip any 10.252.0.0 0.0.0.255
+ deny   ip any any log
+!
+ip access-list extended ACL-CDN-FAILOVER
+ permit ip 10.250.0.0 0.0.0.255 host 203.0.113.10
+ permit ip host 203.0.113.10 10.250.0.0 0.0.0.255
+ deny   ip any any log
+!
+ip ssh logging events
+!
+line console 0
+ exec-timeout 10 0
+ password 7 02050D480809
+ login local
+ logging synchronous
+!
+line vty 0 4
+ access-class MGMT-ACCESS in
+ transport input ssh
+!
+line vty 5 15
+!
+service tcp-keepalives-in
+service tcp-keepalives-out
+!
+spanning-tree portfast bpduguard default
+!
+no cdp run
+no lldp run
+!
+ip arp inspection vlan 10,20,30
+ip dhcp snooping
+ip dhcp snooping vlan 10,20,30
+ip dhcp snooping verify mac-address
+!
+ip source binding 10.250.0.10 0100.5e00.010a vlan 10
+ip source binding 10.251.0.10 0100.5e00.010b vlan 20
+ip source binding 10.252.0.10 0100.5e00.010c vlan 30
+!
+ip device tracking
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+vlan 10
+ name CONTENT-DELIVERY
+vlan 20
+ name MONITORING
+vlan 30
+ name ANALYTICS
+vlan 99
+ name MGMT
+!
+interface GigabitEthernet0/0
+ description Uplink to WAN/CDN
+ switchport mode trunk
+ switchport trunk native vlan 99
+ switchport trunk allowed vlan 10,20,30,99
+ spanning-tree portfast trunk
+ storm-control broadcast level 1.00
+ storm-control multicast level 1.00
+ storm-control unicast level 1.00
+!
+interface GigabitEthernet0/1
+ description Content Delivery Appliance
+ switchport mode access
+ switchport access vlan 10
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+interface GigabitEthernet0/2
+ description Monitoring Appliance
+ switchport mode access
+ switchport access vlan 20
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+interface GigabitEthernet0/3
+ description Analytics Appliance
+ switchport mode access
+ switchport access vlan 30
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+interface GigabitEthernet0/4
+ description Management Workstation
+ switchport mode access
+ switchport access vlan 99
+ switchport port-security
+ switchport port-security maximum 1
+ switchport port-security mac-address sticky
+ switchport port-security violation restrict
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+interface Port-channel1
+ description Uplink Redundancy to Core
+ switchport mode trunk
+ switchport trunk native vlan 99
+ switchport trunk allowed vlan 10,20,30,99
+ spanning-tree portfast trunk
+!
+interface range GigabitEthernet0/5 - 0/6
+ description Port-Channel Members
+ switchport mode trunk
+ channel-group 1 mode active
+!
+interface Vlan10
+ description SVI for Content Delivery
+ ip address 10.250.0.1 255.255.255.0
+ ip helper-address 10.250.0.10
+ ip access-group ACL-STREAMING in
+!
+interface Vlan20
+ description SVI for Monitoring
+ ip address 10.251.0.1 255.255.255.0
+ ip helper-address 10.251.0.10
+ ip access-group ACL-ADMIN-ACCESS in
+!
+interface Vlan30
+ description SVI for Analytics
+ ip address 10.252.0.1 255.255.255.0
+ ip helper-address 10.252.0.10
+ ip access-group ACL-ANALYTICS in
+!
+interface Vlan99
+ description SVI for Management
+ ip address 10.253.0.1 255.255.255.0
+ ip access-group MGMT-ACCESS in
+!
+no ip proxy-arp
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Routing & Switching =====
+ip routing
+!
+ip route 0.0.0.0 0.0.0.0 203.0.113.1
+ip route 203.0.113.10 255.255.255.255 203.0.113.1
+ip route 10.250.0.0 255.255.255.0 Vlan10
+ip route 10.251.0.0 255.255.255.0 Vlan20
+ip route 10.252.0.0 255.255.255.0 Vlan30
+!
+router ospf 10
+ router-id 10.253.0.1
+ passive-interface default
+ no passive-interface Vlan10
+ no passive-interface Vlan20
+ no passive-interface Vlan30
+ network 10.250.0.0 0.0.0.255 area 0
+ network 10.251.0.0 0.0.0.255 area 0
+ network 10.252.0.0 0.0.0.255 area 0
+ network 10.253.0.0 0.0.0.255 area 0
+!
+spanning-tree mode rapid-pvst
+spanning-tree extend system-id
+spanning-tree vlan 10,20,30,99 priority 4096
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Monitoring & Management =====
+logging buffered 32768
+logging console warnings
+logging monitor informational
+logging trap informational
+logging host 10.251.0.20
+logging host 10.251.0.21
+!
+snmp-server community STREAMMONITOR RO 99
+snmp-server community STREAMADMIN RW 99
+snmp-server enable traps snmp authentication linkdown linkup coldstart warmstart
+snmp-server host 10.251.0.20 version 2c STREAMMONITOR
+snmp-server host 10.251.0.21 version 2c STREAMMONITOR
+!
+snmp-server location Main-DC
+snmp-server contact netops@streaming.local
+!
+ntp authenticate
+ntp authentication-key 1 md5 7A8B9C0D1E2F3G4H5I6J7K8L9M0N1O2P
+ntp trusted-key 1
+ntp server 10.251.0.30 key 1
+ntp server 192.0.2.1 key 1
+!
+ip sla 1
+ icmp-echo 203.0.113.10 source-ip 10.250.0.1
+ frequency 30
+ip sla schedule 1 life forever start-time now
+!
+track 1 ip sla 1 reachability
+!
+event manager applet CDN-FAILOVER
+ event track 1 state down
+ action 1.0 cli command "configure terminal"
+ action 1.1 cli command "ip route 0.0.0.0 0.0.0.0 203.0.113.2"
+ action 1.2 syslog msg "CDN primary unreachable, failover route activated"
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Production Readiness =====
+spanning-tree portfast default
+spanning-tree bpduguard default
+!
+errdisable recovery cause bpduguard
+errdisable recovery interval 60
+!
+service sequence-numbers
+!
+archive
+ path flash:backup-config
+ write-memory
+!
+service timestamps debug datetime msec localtime show-timezone
+service timestamps log datetime msec localtime show-timezone
+!
+no ip domain-lookup
+!
+copy running-config startup-config
+!
+! ===== END SECTION =====
+
+=== VERIFICATION PROCEDURES ===
+
+Verification Procedures:
+- show running-config | section hostname|username|enable secret|aaa|access-list|interface|vlan|router|spanning-tree|ip route
+- show interfaces status
+- show vlan brief
+- show ip interface brief
+- show ip route
+- show spanning-tree detail
+- show port-security address
+- show access-lists
+- show logging
+- show snmp community
+- show ntp associations
+- show ip sla statistics
+- show event manager policy registered
+- Test SSH access from 10.251.0.0/24
+- Test streaming and analytics connectivity between VLANs
+- Validate OSPF neighbor states and route propagation
+- Confirm syslog and SNMP traps are received by monitoring hosts
+- Simulate CDN failover and verify route changes and syslog messages
+- Confirm port security and BPDU guard enforcement on all access ports
